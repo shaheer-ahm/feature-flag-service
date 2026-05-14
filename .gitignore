@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Lambda packaging
+function.zip
+
+# OS
+.DS_Store
