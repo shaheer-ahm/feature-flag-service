@@ -84,7 +84,6 @@ def get_flags():
     """
     GET /flags
     Scan the table and return all flag metadata items.
-    LO2 access pattern #1 — list all flags.
     """
     result = table.scan(
         FilterExpression="SK = :meta",
@@ -108,8 +107,6 @@ def create_flag(body: dict):
     """
     POST /flags
     Body: { "flagName": "my-feature", "enabled": false }
-    LO2 access pattern #3 — create a flag.
-    (Implement fully in Week 2)
     """
     flag_name = body.get("flagName", "").strip()
     if not flag_name:
@@ -141,8 +138,6 @@ def toggle_flag(flag_name: str, body: dict):
     """
     PUT /flags/{flagName}
     Body: { "enabled": true }
-    LO2 access pattern #4 — toggle a flag.
-    (Implement fully in Week 2; audit log in Week 3)
     """
     if not flag_name:
         return response(400, {"error": "flagName path parameter is required"})
@@ -164,6 +159,17 @@ def toggle_flag(flag_name: str, body: dict):
     except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
         return response(404, {"error": f"Flag '{flag_name}' not found"})
 
+    # Write audit entry
+    table.put_item(
+        Item={
+            "PK":        flag_pk(flag_name),
+            "SK":        f"AUDIT#{timestamp}",
+            "changedAt": timestamp,
+            "newValue":  enabled,
+            "source":    "admin-dashboard",
+        }
+    )
+
     updated = result["Attributes"]
     return response(200, {
         "flag": {
@@ -177,8 +183,6 @@ def toggle_flag(flag_name: str, body: dict):
 def delete_flag(flag_name: str):
     """
     DELETE /flags/{flagName}
-    LO2 access pattern #5 — delete a flag.
-    (Implement fully in Week 2)
     """
     if not flag_name:
         return response(400, {"error": "flagName path parameter is required"})
