@@ -72,6 +72,10 @@ def lambda_handler(event, context):
     if method == "DELETE" and "/flags/" in path:
         flag_name = params.get("flagName", "")
         return delete_flag(flag_name)
+    
+    if method == "GET" and "/flags/" in path and path.endswith("/audit"):
+        flag_name = params.get("flagName", "")
+        return get_audit_log(flag_name)
 
     return response(404, {"error": "Route not found"})
 
@@ -92,10 +96,12 @@ def get_flags():
 
     flags = [
         {
-            "flagName":  item["flagName"],
-            "enabled":   item["enabled"],
-            "createdAt": item["createdAt"],
-            "updatedAt": item["updatedAt"],
+            "flagName":          item["flagName"],
+            "enabled":           item["enabled"],
+            "description":       item.get("description", ""),
+            "rolloutPercentage": int(item.get("rolloutPercentage", 100)),
+            "createdAt":         item["createdAt"],
+            "updatedAt":         item["updatedAt"],
         }
         for item in result.get("Items", [])
     ]
@@ -114,12 +120,14 @@ def create_flag(body: dict):
 
     timestamp = now_iso()
     item = {
-        "PK":        flag_pk(flag_name),
-        "SK":        "#METADATA",
-        "flagName":  flag_name,
-        "enabled":   body.get("enabled", False),
-        "createdAt": timestamp,
-        "updatedAt": timestamp,
+        "PK":                flag_pk(flag_name),
+        "SK":                "#METADATA",
+        "flagName":          flag_name,
+        "enabled":           body.get("enabled", False),
+        "description":       body.get("description", ""),
+        "rolloutPercentage": int(body.get("rolloutPercentage", 100)),
+        "createdAt":         timestamp,
+        "updatedAt":         timestamp,
     }
 
     # condition_expression prevents accidental overwrites
@@ -149,11 +157,19 @@ def toggle_flag(flag_name: str, body: dict):
     timestamp = now_iso()
 
     try:
+        rollout = body.get("rolloutPercentage")
+        update_expr = "SET enabled = :e, updatedAt = :u"
+        expr_values = {":e": enabled, ":u": timestamp}
+
+        if rollout is not None:
+            update_expr += ", rolloutPercentage = :r"
+            expr_values[":r"] = int(rollout)
+
         result = table.update_item(
             Key={"PK": flag_pk(flag_name), "SK": "#METADATA"},
-            UpdateExpression="SET enabled = :e, updatedAt = :u",
+            UpdateExpression=update_expr,
             ConditionExpression="attribute_exists(PK)",
-            ExpressionAttributeValues={":e": enabled, ":u": timestamp},
+            ExpressionAttributeValues=expr_values,
             ReturnValues="ALL_NEW",
         )
     except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
@@ -196,3 +212,27 @@ def delete_flag(flag_name: str):
         return response(404, {"error": f"Flag '{flag_name}' not found"})
 
     return response(200, {"message": f"Flag '{flag_name}' deleted"})
+
+def get_audit_log(flag_name: str):
+    if not flag_name:
+        return response(400, {"error": "flagName path parameter is required"})
+
+    result = table.query(
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :audit)",
+        ExpressionAttributeValues={
+            ":pk": flag_pk(flag_name),
+            ":audit": "AUDIT#",
+        },
+        ScanIndexForward=False,
+    )
+
+    entries = [
+        {
+            "changedAt": item["changedAt"],
+            "newValue":  item["newValue"],
+            "source":    item.get("source", "unknown"),
+        }
+        for item in result.get("Items", [])
+    ]
+
+    return response(200, {"flagName": flag_name, "history": entries})
